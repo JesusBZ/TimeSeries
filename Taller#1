@@ -1,0 +1,160 @@
+#Time Series Analysis and Forecasting#JesusBZerpa#
+#Instalar el paquete TSstudio#
+
+install.packages("TSstudio")
+
+library(TSstudio)
+
+#Cargamos los datos y convertimos a objeto Time Serie#
+
+install.packages("readxl")
+library(readxl)
+
+Ventas_unidades_2014_2019 <- read_excel("C:/Users/Personal/Desktop/Modelo en R/Arima manufactura/Ventas unidades 2014 2019.xlsx")
+
+
+#Frecuencia de la serie mensual#
+
+Vol<-ts(Ventas_unidades_2014_2019,start=c(2014,1),frequency=12)
+
+#Información de la serie#
+ts_info(Vol)
+
+#Gráfica de la serie temporal#
+
+ts_plot(Vol,
+        title = "Ventas en Volumen Empresa X 2014-2019",
+        Ytitle = "Unidades en miles",
+        Xtitle = "Source: Empresa X Venezuela", 
+        slider = TRUE)
+
+#Descomposición de la serie en tres componentes#
+ts_decompose(Vol)
+
+#Componente estacional#
+ts_seasonal(Vol, type = "all")
+
+#Componente estacional sin tendencia#
+
+ts_seasonal(Vol - decompose(Vol)$trend, 
+            type = "all", 
+            title = "Seasonal Plot - Ventas en Volumen (sin tendencia)")
+#Mapa de calor#
+ts_heatmap(Vol)
+#Analisis de correlacion#
+ts_cor(Vol)
+ts_lags(Vol)
+ts_lags(Vol, lags = c(12, 24, 36, 48))
+
+#Preparacion de datos para training#
+
+Vol_df <- ts_to_prophet(Vol) 
+head(Vol_df)
+library(lubridate)
+Vol_df$flag <- ifelse(year(Vol_df$ds) >= 2016, 1, 0)
+h1 <- 12 
+h2 <- 60 
+Vol_split <- ts_split(Vol, sample.out = h1)
+train <- Vol_split$train
+test <- Vol_split$test
+train_df <- Vol_df[1:(nrow(Vol_df) - h1), ]
+test_df <- Vol_df[(nrow(Vol_df) - h1 + 1):nrow(Vol_df), ]
+set.seed(1234)
+library(forecast)
+library(plotly)
+md1 <- auto.arima(train, 
+                  stepwise = FALSE, 
+                  approximation = FALSE,
+                  D = 1)
+
+## Información de entrenamiento (training) y prueba (test)#
+
+ts_info(train)
+ts_info(test)
+
+#Training#
+fc1 <- forecast(md1, h = h1)
+accuracy(fc1, test)
+
+#Modelo SARIMA()#
+
+test_forecast(forecast.obj = fc1, actual = Vol, test = test) %>% 
+  layout(legend = list(x = 0.6, y = 0.95))
+
+#Modelo ETS Training#
+
+md2 <- ets(train, opt.crit = "mse")
+fc2 <- forecast(md2, h = h1)
+accuracy(fc2, test)
+test_forecast(forecast.obj = fc2, actual = Vol, test = test) %>% 
+  layout(legend = list(x = 0.6, y = 0.95))
+
+# Modelo TSLM #
+
+md3 <- tslm(train ~ season + trend)
+fc3 <- forecast(md3, h = h1)
+accuracy(fc3, test)
+test_forecast(forecast.obj = fc3, actual = Vol, test = test) %>% 
+  layout(legend = list(x = 0.6, y = 0.95))
+
+#Modelo TSLM con Flag# 
+
+md3a <- tslm(train ~ season + trend + flag, data = train_df)
+fc3a <- forecast(md3a, h = h1, newdata = test_df)
+accuracy(fc3a, test)
+test_forecast(forecast.obj = fc3a, actual = Vol, test = test) %>% 
+  layout(legend = list(x = 0.6, y = 0.95))
+
+# Modelo TSLM Polinómico#
+
+md3b <- tslm(train ~ season + trend + I(trend ^ 2))
+fc3b <- forecast(md3b, h = h1)
+accuracy(fc3b, test)
+test_forecast(forecast.obj = fc3b, actual = Vol, test = test)  %>% 
+  layout(legend = list(x = 0.6, y = 0.95))
+
+#Evaluación de residuos del Modelo 1 SARIMA#
+
+check_res(md1)
+
+# Pronósticos del modelo SARIMA#
+
+md_final <- auto.arima(Vol, 
+                  stepwise = FALSE, 
+                  approximation = FALSE,
+                  D = 1)
+fc_final <- forecast(md_final, h = 12)
+plot_forecast(fc_final) %>% 
+  layout(legend = list(x = 0.6, y = 0.95))
+
+## Enfoque Backtesting#
+
+methods <- list(ets1 = list(method = "ets",
+                            method_arg = list(opt.crit = "mse"),
+                            notes = "ETS model with opt.crit = mse"),
+                ets2 = list(method = "ets",
+                            method_arg = list(opt.crit = "amse"),
+                            notes = "ETS model with opt.crit = amse"),
+                arima1 = list(method = "arima",
+                              method_arg = list(order = c(1,0,0)),
+                              notes = "ARIMA(1,0,0)"),
+                Sarima = list(method = "arima",
+                              method_arg = list(order = c(1,0,0),
+                                                seasonal = list(order = c(1,1,0))),
+                              notes = "SARIMA(1,0,0)(1,1,0)"),
+                tslm = list(method = "tslm",
+                            method_arg = list(formula = input ~ trend + season),
+                            notes = "tslm model with trend and seasonal components"))
+
+
+md <- train_model(input = Vol,
+                  methods = methods,
+                  train_method = list(partitions = 6, 
+                                      sample.out = 12, 
+                                      space = 3),
+                  horizon = 12,
+                  error = "MAPE")
+
+#Gráfica#
+plot_model(md)
+
