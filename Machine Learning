@@ -1,4 +1,5 @@
-#Taller Machine Learning-Modelaje Predictivo# Econ. Jesús B. Zerpa#
+#Taller Machine Learning-Modelaje Predictivo#
+#Jesús B. Zerpa|Economist & Data Scientist|#
 #Código en R#
 #Se instalan las siguientes paqueterías#
 
@@ -32,7 +33,7 @@ bikes_tbl <- bikes %>%
     rename(date  = dteday,
            value = cnt)
                       
-#Gráfica de datos y reginones de entrenamiento y prueba#
+#Gráfica de datos y regiones de entrenamiento y prueba#
 
 bikes_tbl %>%
     ggplot(aes(x = date, y = value)) +
@@ -47,3 +48,172 @@ bikes_tbl %>%
     geom_point(alpha = 0.5, color = palette_light()[[1]]) +
     labs(title = "Bikes Sharing Dataset: Escala Diaria", x = "") +
     theme_tq()
+
+#Dividir los datos en conjuntos de entenamiento y prueba#
+
+train_tbl <- bikes_tbl %>% filter(date < ymd("2012-07-01"))
+test_tbl  <- bikes_tbl %>% filter(date >= ymd("2012-07-01"))
+
+# Conjunto de entrenamiento#
+
+train_tbl
+
+#Pasos de preprocesamiento de datos#
+
+recipe_spec_final <- recipe_spec_timeseries %>%
+    step_rm(date) %>%
+    step_rm(contains("iso"), contains("minute"), contains("hour"),
+            contains("am.pm"), contains("xts")) %>%
+    step_normalize(contains("index.num"), date_year) %>%
+    step_dummy(contains("lbl"), one_hot = TRUE) %>%
+    step_ns(date_index.num, deg_free = 3)
+
+bake(prep(recipe_spec_final), new_data = train_tbl)
+
+
+#Agregando especificaciones de series de tiempo#
+
+recipe_spec_timeseries <- recipe(value ~ ., data = train_tbl) %>%
+    step_timeseries_signature(date) 
+    
+#especificación del modelo (lineal)#
+
+model_spec_glmnet <- linear_reg(mode = "regression", penalty = 0.001, mixture = 0.5) %>%
+    set_engine("glmnet")
+    
+# Generando flujo de trabajo#
+
+workflow_glmnet <- workflow() %>%
+    add_recipe(recipe_spec_final) %>%
+    add_model(model_spec_glmnet)
+
+workflow_glmnet
+
+# Entrenamiento función fit() #
+
+workflow_trained <- workflow_glmnet %>% fit(data = train_tbl)
+
+#Prueba (validación)#
+
+prediction_tbl <- workflow_trained %>% 
+    predict(test_tbl) %>%
+    bind_cols(test_tbl) 
+
+prediction_tbl
+
+#Visualización de resultados con ggplot#
+
+ggplot(aes(x = date), data = bikes_tbl) +
+    geom_rect(xmin = as.numeric(ymd("2012-07-01")),
+              xmax = as.numeric(ymd("2013-01-01")),
+              ymin = 0, ymax = 10000,
+              fill = palette_light()[[4]], alpha = 0.01) +
+    annotate("text", x = ymd("2011-10-01"), y = 7800,
+             color = palette_light()[[1]], label = "Región de entrenamiento") +
+    annotate("text", x = ymd("2012-10-01"), y = 1550,
+             color = palette_light()[[1]], label = "Región de Prueba") + 
+    geom_point(aes(x = date, y = value),  
+               alpha = 0.5, color = palette_light()[[1]]) +
+    # Add predictions
+    geom_point(aes(x = date, y = .pred), data = prediction_tbl, 
+               alpha = 0.5, color = palette_light()[[2]]) +
+    theme_tq() 
+    
+# Errores#
+
+prediction_tbl %>% metrics(value, .pred)    
+
+#Gráfica de residuos#
+
+prediction_tbl %>%
+    ggplot(aes(x = date, y = value - .pred)) +
+    geom_hline(yintercept = 0, color = "red") +
+    geom_point(color = palette_light()[[1]], alpha = 0.5) +
+    geom_smooth() +
+    theme_tq() +
+    labs(title = "Test Set: GLM Residuos del Modelo", x = "") +
+    scale_y_continuous(limits = c(-5000, 5000))
+    
+#Extraer índice#
+idx <- bikes_tbl %>% tk_index()
+
+#Resumen descriptivo#
+bikes_summary <- idx %>% tk_get_timeseries_summary()
+
+#Parámetros#
+bikes_summary[1:6]
+
+#Resumen#
+
+bikes_summary[7:12]
+
+#Aplicación#
+idx_future <- idx %>% tk_make_future_timeseries(n_future = 180)
+
+future_tbl <- tibble(date = idx_future) 
+
+future_tbl
+
+#Reentrenamiento#
+future_predictions_tbl <- workflow_glmnet %>% 
+    fit(data = bikes_tbl) %>%
+    predict(future_tbl) %>%
+    bind_cols(future_tbl)
+    
+#Gráfica del modelo#
+
+bikes_tbl %>%
+    ggplot(aes(x = date, y = value)) +
+    geom_rect(xmin = as.numeric(ymd("2012-07-01")),
+              xmax = as.numeric(ymd("2013-01-01")),
+              ymin = 0, ymax = 10000,
+              fill = palette_light()[[4]], alpha = 0.01) +
+    geom_rect(xmin = as.numeric(ymd("2013-01-01")),
+              xmax = as.numeric(ymd("2013-07-01")),
+              ymin = 0, ymax = 10000,
+              fill = palette_light()[[3]], alpha = 0.01) +
+    annotate("text", x = ymd("2011-10-01"), y = 7800,
+             color = palette_light()[[1]], label = "Región entrenamiento") +
+    annotate("text", x = ymd("2012-10-01"), y = 1550,
+             color = palette_light()[[1]], label = "Región Prueba") +
+    annotate("text", x = ymd("2013-4-01"), y = 1550,
+             color = palette_light()[[1]], label = "Región Pronóstico") +
+    geom_point(alpha = 0.5, color = palette_light()[[1]]) +
+    # future data
+    geom_point(aes(x = date, y = .pred), data = future_predictions_tbl,
+               alpha = 0.5, color = palette_light()[[2]]) +
+    geom_smooth(aes(x = date, y = .pred), data = future_predictions_tbl,
+                method = 'loess') + 
+    labs(title = "Bikes Sharing Dataset: 6 meses de pronóstico", x = "") +
+    theme_tq()
+
+# Cálculo de la desviación estándard de los residuos#
+
+test_resid_sd <- prediction_tbl %>%
+    summarize(stdev = sd(value - .pred))
+
+future_predictions_tbl <- future_predictions_tbl %>%
+    mutate(
+        lo.95 = .pred - 1.96 * test_resid_sd$stdev,
+        lo.80 = .pred - 1.28 * test_resid_sd$stdev,
+        hi.80 = .pred + 1.28 * test_resid_sd$stdev,
+        hi.95 = .pred + 1.96 * test_resid_sd$stdev
+    )
+    
+# Pronósticos con intérvalos de predicción#
+
+bikes_tbl %>%
+    ggplot(aes(x = date, y = value)) +
+    geom_point(alpha = 0.5, color = palette_light()[[1]]) +
+    geom_ribbon(aes(y = .pred, ymin = lo.95, ymax = hi.95), 
+                data = future_predictions_tbl, 
+                fill = "#D5DBFF", color = NA, size = 0) +
+    geom_ribbon(aes(y = .pred, ymin = lo.80, ymax = hi.80, fill = key), 
+                data = future_predictions_tbl,
+                fill = "#596DD5", color = NA, size = 0, alpha = 0.8) +
+    geom_point(aes(x = date, y = .pred), data = future_predictions_tbl,
+               alpha = 0.5, color = palette_light()[[2]]) +
+    geom_smooth(aes(x = date, y = .pred), data = future_predictions_tbl,
+                method = 'loess', color = "white") + 
+    labs(title = "Bikes Sharing Dataset: 6 meses de pronósticos con intérvalos de predicción", x = "") +
+    theme_tq()  
